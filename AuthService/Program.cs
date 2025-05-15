@@ -36,16 +36,27 @@ try
 {
     // Henter hemmeligheder fra Vault
     logger.LogInformation("Henter hemmeligheder fra Vault...");
-    Secret<SecretData> secretData = await vaultClient.V1.Secrets.KeyValue.V2.ReadSecretAsync("my-secret", mountPoint: "secret");
+    Secret<SecretData> secretData = await vaultClient.V1.Secrets.KeyValue.V2.ReadSecretAsync(path:"my-secret", mountPoint: "secret");
+     Secret<SecretData> secretConnections = await vaultClient.V1.Secrets.KeyValue.V2.ReadSecretAsync(path:"my-connections", mountPoint: "connections");
+    string mySecretKey = secretData.Data.Data["Secret"]?.ToString();
+    if (string.IsNullOrEmpty(mySecretKey))
+    {
+        logger.LogError("Secret er ikke defineret i Vault.");
+        throw new ArgumentNullException(nameof(mySecretKey), "Secret er ikke defineret i Vault.");
+    }
 
-    string mySecret = secretData.Data.Data["Secret"]?.ToString() ?? throw new Exception("Secret er ikke fundet i Vault.");
-    string myIssuer = secretData.Data.Data["Issuer"]?.ToString() ?? throw new Exception("Issuer er ikke fundet i Vault.");
+    string myIssuer = secretData.Data.Data["Issuer"]?.ToString();
+        if (string.IsNullOrEmpty(myIssuer))
+        {
+            logger.LogError("Issuer er ikke defineret i Vault.");
+            throw new ArgumentNullException(nameof(myIssuer), "Issuer er ikke defineret i Vault.");
+        }
 
-    builder.Configuration["Secret"] = mySecret;
+    builder.Configuration["Secret"] = mySecretKey;
     builder.Configuration["Issuer"] = myIssuer;
 
     logger.LogInformation("Hemmeligheder hentet fra Vault:");
-    logger.LogInformation($"Secret: {mySecret}");
+    logger.LogInformation($"Secret: {mySecretKey}");
     logger.LogInformation($"Issuer: {myIssuer}");
 
 
@@ -54,30 +65,15 @@ try
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
-        var secret = builder.Configuration["Secret"];
-        var issuer = builder.Configuration["Issuer"];
-
-        if (string.IsNullOrEmpty(secret))
-        {
-            logger.LogError("Secret er ikke defineret i konfigurationen.");
-            throw new ArgumentNullException(nameof(secret), "Secret er ikke defineret i konfigurationen.");
-        }
-
-        if (string.IsNullOrEmpty(issuer))
-        {
-            logger.LogError("Issuer er ikke defineret i konfigurationen.");
-            throw new ArgumentNullException(nameof(issuer), "Issuer er ikke defineret i konfigurationen.");
-        }
-
         options.TokenValidationParameters = new TokenValidationParameters()
         {
             ValidateIssuer = true,
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = issuer,
+            ValidIssuer = myIssuer,
             ValidAudience = "http://localhost",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(mySecretKey))
         };
     });
 }
