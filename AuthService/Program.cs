@@ -13,14 +13,14 @@ var builder = WebApplication.CreateBuilder(args);
 var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILoggerFactory>().CreateLogger("VaultLogger");
 
 var httpClientHandler = new HttpClientHandler();
-var EndPoint = "https://vault_dev:8201/";
+var EndPoint = "https://vaulthost:8201/";
 httpClientHandler.ServerCertificateCustomValidationCallback =
 (message, cert, chain, sslPolicyErrors) => { return true; };
 
 // Konfigurer Vault klienten
 // Du skal bruge en gyldig token til at autentificere dig mod Vault. Erstat med din token.
 IAuthMethodInfo authMethod =
-new TokenAuthMethodInfo("00000000-0000-0000-0000-000000000000");
+new TokenAuthMethodInfo("00000000-0000-0000-0000-00000000");
 var vaultClientSettings = new VaultClientSettings(EndPoint, authMethod)
 {
     Namespace = "",
@@ -37,7 +37,7 @@ try
     // Henter hemmeligheder fra Vault
     logger.LogInformation("Henter hemmeligheder fra Vault...");
     Secret<SecretData> secretData = await vaultClient.V1.Secrets.KeyValue.V2.ReadSecretAsync(path:"my-secret", mountPoint: "secret");
-     Secret<SecretData> secretConnections = await vaultClient.V1.Secrets.KeyValue.V2.ReadSecretAsync(path:"my-connections", mountPoint: "connections");
+
     string mySecretKey = secretData.Data.Data["Secret"]?.ToString();
     if (string.IsNullOrEmpty(mySecretKey))
     {
