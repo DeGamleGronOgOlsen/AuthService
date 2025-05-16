@@ -20,7 +20,7 @@ httpClientHandler.ServerCertificateCustomValidationCallback =
 // Konfigurer Vault klienten
 // Du skal bruge en gyldig token til at autentificere dig mod Vault. Erstat med din token.
 IAuthMethodInfo authMethod =
-new TokenAuthMethodInfo("00000000-0000-0000-0000-00000000");
+new TokenAuthMethodInfo("00000000-0000-0000-0000-000000000000");
 var vaultClientSettings = new VaultClientSettings(EndPoint, authMethod)
 {
     Namespace = "",
@@ -36,7 +36,7 @@ try
 {
     // Henter hemmeligheder fra Vault
     logger.LogInformation("Henter hemmeligheder fra Vault...");
-    Secret<SecretData> secretData = await vaultClient.V1.Secrets.KeyValue.V2.ReadSecretAsync(path:"my-secret", mountPoint: "secret");
+    Secret<SecretData> secretData = await vaultClient.V1.Secrets.KeyValue.V2.ReadSecretAsync(path:"Secrets", mountPoint: "secret");
 
     string mySecretKey = secretData.Data.Data["Secret"]?.ToString();
     if (string.IsNullOrEmpty(mySecretKey))
