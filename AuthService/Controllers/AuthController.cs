@@ -4,113 +4,153 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using System.Net.Http;
+using System.Net.Http.Json;
 
-namespace AuthService.Controllers;
+// Assuming LoginModel is defined. If not, you'll need its definition.
+// It might look like:
+// public class LoginModel { public string Username { get; set; } public string Password { get; set; } }
 
-[ApiController]
-[Route("[controller]")]
-public class AuthController : ControllerBase
+namespace AuthService.Controllers
 {
-
-    private readonly ILogger<AuthController> _logger;
-
-    private readonly IConfiguration _config;
-
-    private readonly HttpClient _httpClient;
-
-    public AuthController(ILogger<AuthController> logger, IConfiguration config, HttpClient httpClient)
-{
-    _config = config;
-    _logger = logger;
-    _httpClient = httpClient;
-}
-
-// Generer JWT token
-private string GenerateJwtToken(string username, string? role)
-{
-    var secret = _config["Secret"];
-    var issuer = _config["Issuer"];
-
-    if (string.IsNullOrEmpty(secret))
+    [ApiController]
+    [Route("[controller]")]
+    public class AuthController : ControllerBase
     {
-        _logger.LogError("Secret er ikke defineret i konfigurationen.");
-        throw new ArgumentNullException(nameof(secret), "Secret er ikke defineret i konfigurationen.");
-    }
+        private readonly ILogger<AuthController> _logger;
+        private readonly IConfiguration _config;
+        private readonly HttpClient _httpClient; // General HttpClient from DI
 
-    if (string.IsNullOrEmpty(issuer))
-    {
-        _logger.LogError("Issuer er ikke defineret i konfigurationen.");
-        throw new ArgumentNullException(nameof(issuer), "Issuer er ikke defineret i konfigurationen.");
-    }
-
-    var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
-    var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
-    var claims = new List<Claim>
-    {
-        new Claim(ClaimTypes.NameIdentifier, username)
-    };
-
-    if (!string.IsNullOrEmpty(role))
-    {
-        claims.Add(new Claim(ClaimTypes.Role, role));
-    }
-
-    var token = new JwtSecurityToken(
-        issuer,
-        audience: "http://localhost",
-        claims,
-        expires: DateTime.Now.AddMinutes(15),
-        signingCredentials: credentials);
-
-    return new JwtSecurityTokenHandler().WriteToken(token);
-}
-
-private async Task<(bool IsValid, string? Role)> ValidateUserAsync(string username, string password)
-{
-    var userServiceUrl = _config["UserServiceUrl"]; // Henter UserService URL fra konfigurationen
-
-    try
-    {
-        var response = await _httpClient.PostAsJsonAsync($"{userServiceUrl}/User/validate", new { Username = username, Password = password });
-
-        if (response.IsSuccessStatusCode)
+        public AuthController(ILogger<AuthController> logger, IConfiguration config, HttpClient httpClient)
         {
-            var result = await response.Content.ReadFromJsonAsync<ValidateUserResponse>();
-            string? role = result?.Role;
-            _logger.LogInformation("User validated successfully via UserService with role: {Role}", role);
-            return (true, role);
+            _config = config;
+            _logger = logger;
+            _httpClient = httpClient;
         }
 
-        _logger.LogWarning("User validation failed via UserService. Status code: {StatusCode}", response.StatusCode);
-        return (false, null);
+        private string GenerateJwtToken(string username, string? role)
+        {
+            var secret = _config["JwtSettings:Secret"]; // Key used in Program.cs
+            var issuer = _config["JwtSettings:Issuer"]; // Key used in Program.cs
+            var audience = _config["JwtSettings:Audience"]; // Key used in Program.cs
+
+            if (string.IsNullOrEmpty(secret))
+            {
+                _logger.LogError("AuthService: JWT Secret ('JwtSettings:Secret') is not defined in configuration for token generation.");
+                throw new InvalidOperationException("JWT Secret is not configured for token generation.");
+            }
+            if (string.IsNullOrEmpty(issuer))
+            {
+                _logger.LogError("AuthService: JWT Issuer ('JwtSettings:Issuer') is not defined in configuration for token generation.");
+                throw new InvalidOperationException("JWT Issuer is not configured for token generation.");
+            }
+            if (string.IsNullOrEmpty(audience))
+            {
+                _logger.LogError("AuthService: JWT Audience ('JwtSettings:Audience') is not defined in configuration for token generation.");
+                throw new InvalidOperationException("JWT Audience is not configured for token generation.");
+            }
+
+            var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
+            var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+
+            var claims = new List<Claim>
+            {
+                new Claim(JwtRegisteredClaimNames.Sub, username),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            };
+
+            if (!string.IsNullOrEmpty(role))
+            {
+                claims.Add(new Claim(ClaimTypes.Role, role));
+            }
+
+            var token = new JwtSecurityToken(
+                issuer: issuer,
+                audience: audience,
+                claims: claims,
+                expires: DateTime.Now.AddMinutes(60), // Example: 60 minutes expiration
+                signingCredentials: credentials);
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+
+        private async Task<(bool IsValid, string? Role)> ValidateUserAsync(string username, string password)
+        {
+            _logger.LogInformation("AuthService: Attempting to validate user '{Username}' via UserService.", username);
+            
+            // UserServiceUrl comes from IConfiguration, populated by docker-compose environment variable
+            var userServiceUrl = _config["UserServiceUrl"]; 
+
+            if (string.IsNullOrEmpty(userServiceUrl))
+            {
+                _logger.LogError("AuthService: UserServiceUrl is not configured (expected from environment variable 'UserServiceUrl'). Cannot call UserService.");
+                return (false, null);
+            }
+
+            var validationEndpoint = $"{userServiceUrl.TrimEnd('/')}/User/validate";
+            
+            try
+            {
+                var validationPayload = new { Username = username, Password = password };
+                _logger.LogInformation("AuthService: Calling UserService validation endpoint: {ValidationEndpoint}", validationEndpoint);
+
+                // Using the injected general HttpClient
+                var response = await _httpClient.PostAsJsonAsync(validationEndpoint, validationPayload);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var result = await response.Content.ReadFromJsonAsync<ValidateUserResponse>();
+                    string? role = result?.Role;
+                    _logger.LogInformation("AuthService: User '{Username}' validated successfully by UserService with role: {Role}", username, role);
+                    return (true, role);
+                }
+                else
+                {
+                    var errorContent = await response.Content.ReadAsStringAsync();
+                    _logger.LogWarning("AuthService: User validation failed via UserService for '{Username}'. Status: {StatusCode}, Endpoint: {ValidationEndpoint}, Response: {ErrorContent}", 
+                        username, response.StatusCode, validationEndpoint, errorContent);
+                    return (false, null);
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "AuthService: HttpRequestException while communicating with UserService at {ValidationEndpoint} for user '{Username}'. Ensure UserService is accessible.", validationEndpoint, username);
+                return (false, null);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "AuthService: Unexpected error while communicating with UserService for user '{Username}'.", username);
+                return (false, null);
+            }
+        }
+
+        [AllowAnonymous]
+        [HttpPost("login")]
+        public async Task<IActionResult> Login([FromBody] LoginModel login) // Assuming LoginModel is defined/accessible
+        {
+            if (login == null || string.IsNullOrEmpty(login.Username) || string.IsNullOrEmpty(login.Password))
+            {
+                return BadRequest(new { message = "Username and password are required." });
+            }
+
+            _logger.LogInformation("AuthService: Login attempt for user '{Username}'.", login.Username);
+            var (isValid, role) = await ValidateUserAsync(login.Username, login.Password);
+
+            if (isValid)
+            {
+                var token = GenerateJwtToken(login.Username, role);
+                _logger.LogInformation("AuthService: Token generated successfully for user '{Username}'.", login.Username);
+                return Ok(new { token = token });
+            }
+
+            _logger.LogWarning("AuthService: Unauthorized login attempt for '{Username}'.", login.Username);
+            return Unauthorized(new { message = "Invalid username or password" });
+        }
+
+        // DTO for deserializing the response from UserService's /User/validate endpoint
+        public class ValidateUserResponse
+        {
+            public string? Role { get; set; }
+        }
     }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Error while communicating with UserService.");
-        return (false, null);
-    }
 }
-
-[AllowAnonymous]
-[HttpPost("login")]
-public async Task<IActionResult> Login([FromBody] LoginModel login)
-{
-    var (isValid, role) = await ValidateUserAsync(login.Username, login.Password);
-
-    if (isValid)
-    {
-        var token = GenerateJwtToken(login.Username, role);
-        return Ok(new { token });
-    }
-
-    return Unauthorized(new { message = "Invalid username or password" });
-}
-
-public class ValidateUserResponse
-{
-    public string? Role { get; set; }
-}
-
-}
-
-
