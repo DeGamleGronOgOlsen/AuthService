@@ -6,6 +6,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Net.Http;
 using System.Net.Http.Json;
+using AuthService.Models; // Add this using statement
 
 // Assuming LoginModel is defined. If not, you'll need its definition.
 // It might look like:
@@ -74,7 +75,7 @@ namespace AuthService.Controllers
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
 
-        private async Task<(bool IsValid, string? Role)> ValidateUserAsync(string username, string password)
+        private async Task<(bool IsValid, string? Role, string? UserId)> ValidateUserAsync(string username, string password)
         {
             _logger.LogInformation("AuthService: Attempting to validate user '{Username}' via UserService.", username);
             
@@ -84,7 +85,7 @@ namespace AuthService.Controllers
             if (string.IsNullOrEmpty(userServiceUrl))
             {
                 _logger.LogError("AuthService: UserServiceUrl is not configured (expected from environment variable 'UserServiceUrl'). Cannot call UserService.");
-                return (false, null);
+                return (false, null, null);
             }
 
             var validationEndpoint = $"{userServiceUrl.TrimEnd('/')}/User/validate";
@@ -101,32 +102,33 @@ namespace AuthService.Controllers
                 {
                     var result = await response.Content.ReadFromJsonAsync<ValidateUserResponse>();
                     string? role = result?.Role;
-                    _logger.LogInformation("AuthService: User '{Username}' validated successfully by UserService with role: {Role}", username, role);
-                    return (true, role);
+                    string? userId = result?.UserId;
+                    _logger.LogInformation("AuthService: User '{Username}' validated successfully by UserService with role: {Role}, UserId: {UserId}", username, role, userId);
+                    return (true, role, userId);
                 }
                 else
                 {
                     var errorContent = await response.Content.ReadAsStringAsync();
                     _logger.LogWarning("AuthService: User validation failed via UserService for '{Username}'. Status: {StatusCode}, Endpoint: {ValidationEndpoint}, Response: {ErrorContent}", 
                         username, response.StatusCode, validationEndpoint, errorContent);
-                    return (false, null);
+                    return (false, null, null);
                 }
             }
             catch (HttpRequestException ex)
             {
                 _logger.LogError(ex, "AuthService: HttpRequestException while communicating with UserService at {ValidationEndpoint} for user '{Username}'. Ensure UserService is accessible.", validationEndpoint, username);
-                return (false, null);
+                return (false, null, null);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "AuthService: Unexpected error while communicating with UserService for user '{Username}'.", username);
-                return (false, null);
+                return (false, null, null);
             }
         }
 
         [AllowAnonymous]
         [HttpPost("login")]
-        public async Task<IActionResult> Login([FromBody] LoginModel login) // Assuming LoginModel is defined/accessible
+        public async Task<IActionResult> Login([FromBody] LoginModel login)
         {
             if (login == null || string.IsNullOrEmpty(login.Username) || string.IsNullOrEmpty(login.Password))
             {
@@ -134,23 +136,21 @@ namespace AuthService.Controllers
             }
 
             _logger.LogInformation("AuthService: Login attempt for user '{Username}'.", login.Username);
-            var (isValid, role) = await ValidateUserAsync(login.Username, login.Password);
+            var (isValid, role, userId) = await ValidateUserAsync(login.Username, login.Password);
 
             if (isValid)
             {
                 var token = GenerateJwtToken(login.Username, role);
-                _logger.LogInformation("AuthService: Token generated successfully for user '{Username}'.", login.Username);
-                return Ok(new { token = token });
+                _logger.LogInformation("AuthService: Token generated successfully for user '{Username}' with UserId: {UserId}.", login.Username, userId);
+                return Ok(new LoginResponse 
+                { 
+                    Token = token,
+                    UserId = userId ?? string.Empty
+                });
             }
 
             _logger.LogWarning("AuthService: Unauthorized login attempt for '{Username}'.", login.Username);
             return Unauthorized(new { message = "Invalid username or password" });
-        }
-
-        // DTO for deserializing the response from UserService's /User/validate endpoint
-        public class ValidateUserResponse
-        {
-            public string? Role { get; set; }
         }
     }
 }

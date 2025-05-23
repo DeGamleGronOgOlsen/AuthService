@@ -100,6 +100,18 @@ builder.Services.AddHttpClient(); // For AuthController to call UserService
 builder.Services.AddControllers();
 builder.Services.AddAuthorization();
 
+// Configure CORS policy to allow your frontend
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowCors", policy =>
+    {
+        policy.WithOrigins("http://localhost:8081", "http://localhost:8080", "http://localhost:4000", "http://localhost:5162", "http://localhost:8201") // Added 8081 first
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -123,6 +135,9 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 var app = builder.Build();
+
+// CORS must be before authentication/authorization
+app.UseCors("AllowCors");
 
 if (app.Environment.IsDevelopment())
 {
