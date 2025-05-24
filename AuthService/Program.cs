@@ -17,6 +17,19 @@ var EndPoint = "https://vaulthost:8201/";
 httpClientHandler.ServerCertificateCustomValidationCallback =
 (message, cert, chain, sslPolicyErrors) => { return true; };
 
+
+// Configure CORS policy to allow your frontend
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend", policy =>
+    {
+        policy.WithOrigins("http://localhost:8080")
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
+
 // Konfigurer Vault klienten
 // Du skal bruge en gyldig token til at autentificere dig mod Vault. Erstat med din token.
 IAuthMethodInfo authMethod =
@@ -89,6 +102,8 @@ builder.Services.AddControllers();
 
 var app = builder.Build();
 
+// CORS middleware must be early in the pipeline
+app.UseCors("AllowFrontend");
 
 app.UseHttpsRedirection();
 

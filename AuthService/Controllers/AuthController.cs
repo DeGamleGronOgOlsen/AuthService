@@ -65,29 +65,30 @@ private string GenerateJwtToken(string username, string? role)
     return new JwtSecurityTokenHandler().WriteToken(token);
 }
 
-private async Task<(bool IsValid, string? Role)> ValidateUserAsync(string username, string password)
+private async Task<(bool IsValid, string? Role, string? UserId)> ValidateUserAsync(string username, string password)
 {
-    var userServiceUrl = _config["UserServiceUrl"]; // Henter UserService URL fra konfigurationen
+    var userServiceUrl = _config["UserServiceUrl"];
 
     try
     {
-        var response = await _httpClient.PostAsJsonAsync($"{userServiceUrl}/User/validate", new { Username = username, Password = password });
+        var response = await _httpClient.PostAsJsonAsync($"{userServiceUrl}/user/validate", new { Username = username, Password = password });
 
         if (response.IsSuccessStatusCode)
         {
             var result = await response.Content.ReadFromJsonAsync<ValidateUserResponse>();
             string? role = result?.Role;
-            _logger.LogInformation("User validated successfully via UserService with role: {Role}", role);
-            return (true, role);
+            string? userId = result?.UserId;
+            _logger.LogInformation("User validated successfully via UserService with role: {Role} and userId: {UserId}", role, userId);
+            return (true, role, userId);
         }
 
         _logger.LogWarning("User validation failed via UserService. Status code: {StatusCode}", response.StatusCode);
-        return (false, null);
+        return (false, null, null);
     }
     catch (Exception ex)
     {
         _logger.LogError(ex, "Error while communicating with UserService.");
-        return (false, null);
+        return (false, null, null);
     }
 }
 
@@ -95,12 +96,12 @@ private async Task<(bool IsValid, string? Role)> ValidateUserAsync(string userna
 [HttpPost("login")]
 public async Task<IActionResult> Login([FromBody] LoginModel login)
 {
-    var (isValid, role) = await ValidateUserAsync(login.Username, login.Password);
+    var (isValid, role,userId) = await ValidateUserAsync(login.Username, login.Password);
 
     if (isValid)
     {
         var token = GenerateJwtToken(login.Username, role);
-        return Ok(new { token });
+        return Ok(new { token, username = login.Username, userId });
     }
 
     return Unauthorized(new { message = "Invalid username or password" });
@@ -109,6 +110,7 @@ public async Task<IActionResult> Login([FromBody] LoginModel login)
 public class ValidateUserResponse
 {
     public string? Role { get; set; }
+    public string? UserId { get; set; }
 }
 
 }
