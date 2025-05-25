@@ -111,7 +111,7 @@ public class AuthController : ControllerBase
         {
             var token = GenerateJwtToken(login.Username, role);
             _logger.LogInformation("Login successful for user {Username}", login.Username);
-            return Ok(new { token, username = login.Username, userId });
+            return Ok(new { token, username = login.Username, userId, role });
         }
 
         _logger.LogWarning("Login failed for user {Username}", login.Username);
