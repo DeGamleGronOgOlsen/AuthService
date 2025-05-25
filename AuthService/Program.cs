@@ -1,116 +1,116 @@
-using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using NLog;
+using NLog.Web;
 using VaultSharp;
 using VaultSharp.V1.AuthMethods.Token;
 using VaultSharp.V1.Commons;
 using VaultSharp.V1.AuthMethods;
+using System.Text;
 
-
-var builder = WebApplication.CreateBuilder(args);
-
-// Tilføjer logging
-var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILoggerFactory>().CreateLogger("VaultLogger");
-
-var httpClientHandler = new HttpClientHandler();
-var EndPoint = "https://vaulthost:8201/";
-httpClientHandler.ServerCertificateCustomValidationCallback =
-(message, cert, chain, sslPolicyErrors) => { return true; };
-
-
-// Configure CORS policy to allow your frontend
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowFrontend", policy =>
-    {
-        policy.WithOrigins("http://localhost:8080")
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials();
-    });
-});
-
-// Konfigurer Vault klienten
-// Du skal bruge en gyldig token til at autentificere dig mod Vault. Erstat med din token.
-IAuthMethodInfo authMethod =
-new TokenAuthMethodInfo("00000000-0000-0000-0000-000000000000");
-var vaultClientSettings = new VaultClientSettings(EndPoint, authMethod)
-{
-    Namespace = "",
-    MyHttpClientProviderFunc = handler
-    => new HttpClient(httpClientHandler)
-    {
-        BaseAddress = new Uri(EndPoint)
-    }
-};
-IVaultClient vaultClient = new VaultClient(vaultClientSettings);
+var logger = NLog.LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
+logger.Debug("Starting AuthService");
 
 try
 {
-    // Henter hemmeligheder fra Vault
-    logger.LogInformation("Henter hemmeligheder fra Vault...");
-    Secret<SecretData> secretData = await vaultClient.V1.Secrets.KeyValue.V2.ReadSecretAsync(path:"Secrets", mountPoint: "secret");
+    var builder = WebApplication.CreateBuilder(args);
 
-    string mySecretKey = secretData.Data.Data["Secret"]?.ToString();
-    if (string.IsNullOrEmpty(mySecretKey))
+    builder.Logging.ClearProviders();
+    builder.Host.UseNLog();
+
+    var httpClientHandler = new HttpClientHandler();
+    var EndPoint = "https://vaulthost:8201/";
+    httpClientHandler.ServerCertificateCustomValidationCallback =
+        (message, cert, chain, sslPolicyErrors) => true;
+
+    builder.Services.AddCors(options =>
     {
-        logger.LogError("Secret er ikke defineret i Vault.");
-        throw new ArgumentNullException(nameof(mySecretKey), "Secret er ikke defineret i Vault.");
-    }
-
-    string myIssuer = secretData.Data.Data["Issuer"]?.ToString();
-        if (string.IsNullOrEmpty(myIssuer))
+        options.AddPolicy("AllowFrontend", policy =>
         {
-            logger.LogError("Issuer er ikke defineret i Vault.");
-            throw new ArgumentNullException(nameof(myIssuer), "Issuer er ikke defineret i Vault.");
+            policy.WithOrigins("http://localhost:8080")
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .AllowCredentials();
+        });
+    });
+
+    IAuthMethodInfo authMethod = new TokenAuthMethodInfo("00000000-0000-0000-0000-000000000000");
+    var vaultClientSettings = new VaultClientSettings(EndPoint, authMethod)
+    {
+        Namespace = "",
+        MyHttpClientProviderFunc = handler => new HttpClient(httpClientHandler)
+        {
+            BaseAddress = new Uri(EndPoint)
+        }
+    };
+    IVaultClient vaultClient = new VaultClient(vaultClientSettings);
+
+    try
+    {
+        logger.Info("Fetching secrets from Vault...");
+        Secret<SecretData> secretData = await vaultClient.V1.Secrets.KeyValue.V2.ReadSecretAsync(path: "Secrets", mountPoint: "secret");
+
+        string mySecretKey = secretData.Data.Data["Secret"]?.ToString();
+        if (string.IsNullOrEmpty(mySecretKey))
+        {
+            logger.Error("Secret is not defined in Vault.");
+            throw new ArgumentNullException(nameof(mySecretKey), "Secret is not defined in Vault.");
         }
 
-    builder.Configuration["Secret"] = mySecretKey;
-    builder.Configuration["Issuer"] = myIssuer;
-
-    logger.LogInformation("Hemmeligheder hentet fra Vault:");
-    logger.LogInformation($"Secret: {mySecretKey}");
-    logger.LogInformation($"Issuer: {myIssuer}");
-
-
-// Konfigurer JWT autentificering
-    builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters()
+        string myIssuer = secretData.Data.Data["Issuer"]?.ToString();
+        if (string.IsNullOrEmpty(myIssuer))
         {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = myIssuer,
-            ValidAudience = "http://localhost",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(mySecretKey))
-        };
-    });
+            logger.Error("Issuer is not defined in Vault.");
+            throw new ArgumentNullException(nameof(myIssuer), "Issuer is not defined in Vault.");
+        }
+
+        builder.Configuration["Secret"] = mySecretKey;
+        builder.Configuration["Issuer"] = myIssuer;
+
+        logger.Info("Secrets fetched from Vault:");
+        logger.Info($"Secret: {mySecretKey}");
+        logger.Info($"Issuer: {myIssuer}");
+
+        builder.Services
+            .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(options =>
+            {
+                options.TokenValidationParameters = new TokenValidationParameters()
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = myIssuer,
+                    ValidAudience = "http://localhost",
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(mySecretKey))
+                };
+            });
+    }
+    catch (Exception ex)
+    {
+        logger.Error(ex, "Error fetching secrets from Vault");
+        throw;
+    }
+
+    builder.Services.AddHttpClient();
+    builder.Services.AddControllers();
+
+    var app = builder.Build();
+
+    app.UseCors("AllowFrontend");
+    app.UseHttpsRedirection();
+    app.UseAuthentication();
+    app.UseAuthorization();
+    app.MapControllers();
+    app.Run();
 }
 catch (Exception ex)
 {
-    logger.LogError($"Fejl under hentning af hemmeligheder fra Vault: {ex.Message}");
+    logger.Error(ex, "Stopped program because of exception");
     throw;
 }
-
-// Tilføj services til containeren.
-builder.Services.AddHttpClient();
-builder.Services.AddControllers();
-
-var app = builder.Build();
-
-// CORS middleware must be early in the pipeline
-app.UseCors("AllowFrontend");
-
-app.UseHttpsRedirection();
-
-app.UseAuthentication();
-
-app.UseAuthorization();
-
-app.MapControllers();
-
-app.Run();
+finally
+{
+    NLog.LogManager.Shutdown();
+}
